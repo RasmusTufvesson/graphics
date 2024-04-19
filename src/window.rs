@@ -23,13 +23,24 @@ pub async fn run() -> Result<(), ()> {
                         println!("The close button was pressed; stopping");
                         elwt.exit();
                     },
-                    WindowEvent::RedrawRequested => state.render().unwrap(),
+                    WindowEvent::RedrawRequested => {
+                        state.update();
+                        match state.render() {
+                            Ok(_) => {}
+                            // Reconfigure the surface if lost
+                            Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+                            Err(wgpu::SurfaceError::OutOfMemory) => {
+                                println!("Ran out of memory; stopping");
+                                elwt.exit();
+                            },
+                            Err(e) => eprintln!("{:?}", e),
+                        }
+                    },
                     WindowEvent::Resized(size) => state.resize(size),
                     _ => ()
                 }
             }
             Event::AboutToWait => {
-                state.update();
                 state.window().request_redraw();
             },
             _ => ()
@@ -136,6 +147,37 @@ impl State<'_> {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        todo!()
+        let output = self.surface.get_current_texture()?;
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        });
+
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+        }
+    
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    
+        Ok(())
     }
 }
