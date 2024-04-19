@@ -1,4 +1,5 @@
 mod window;
+mod texture;
 
 fn main() {
     env_logger::init();
