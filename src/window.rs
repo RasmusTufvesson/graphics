@@ -1,38 +1,136 @@
+use wgpu::SurfaceTargetUnsafe;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    window::{WindowBuilder, Window},
 };
 
-pub fn run() -> Result<(), ()> {
+pub async fn run() -> Result<(), ()> {
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
+    let mut state = State::new(window).await;
+
     match event_loop.run(move |event, elwt| {
         match event {
             Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                println!("The close button was pressed; stopping");
-                elwt.exit();
-            },
+                window_id,
+                event
+            } if window_id == state.window().id() => if !state.input(&event) {
+                match event {
+                    WindowEvent::CloseRequested => {
+                        println!("The close button was pressed; stopping");
+                        elwt.exit();
+                    },
+                    WindowEvent::RedrawRequested => state.render().unwrap(),
+                    WindowEvent::Resized(size) => state.resize(size),
+                    _ => ()
+                }
+            }
             Event::AboutToWait => {
-                // insert app code here
-
-                window.request_redraw();
-            },
-            Event::WindowEvent {
-                event: WindowEvent::RedrawRequested,
-                ..
-            } => {
-                // insert graphics code here
+                state.update();
+                state.window().request_redraw();
             },
             _ => ()
         }
     }) {
         Ok(_) => Ok(()),
         Err(_) => Err(()),
+    }
+}
+
+struct State<'a> {
+    surface: wgpu::Surface<'a>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    size: winit::dpi::PhysicalSize<u32>,
+    // The window must be declared after the surface so
+    // it gets dropped after it as the surface contains
+    // unsafe references to the window's resources.
+    window: Window,
+}
+
+impl State<'_> {
+    async fn new(window: Window) -> Self {
+        let mut size = window.inner_size();
+        size.height = size.height.max(1);
+        size.width = size.width.max(1);
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+        
+        // The surface needs to live as long as the window that created it.
+        // State owns the window, so this should be safe.
+        let surface: wgpu::Surface = unsafe { instance.create_surface_unsafe(SurfaceTargetUnsafe::from_window(&window).unwrap()) }.unwrap();
+
+        let adapter = instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            },
+        ).await.unwrap();
+
+        let (device, queue) = adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::empty(),
+                // WebGL doesn't support all of wgpu's features, so if
+                // we're building for the web, we'll have to disable some.
+                required_limits: wgpu::Limits::default(),
+                label: None,
+            },
+            None, // Trace path
+        ).await.unwrap();
+
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = surface_caps.formats.iter()
+            .copied()
+            .filter(|f| f.is_srgb())
+            .next()
+            .unwrap_or(surface_caps.formats[0]);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: surface_caps.present_modes[0],
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        Self {
+            window,
+            surface,
+            device,
+            queue,
+            config,
+            size,
+        }
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.window
+    }
+
+    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        todo!()
+    }
+
+    fn input(&mut self, event: &WindowEvent) -> bool {
+        todo!()
+    }
+
+    fn update(&mut self) {
+        
+    }
+
+    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        todo!()
     }
 }
