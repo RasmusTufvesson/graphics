@@ -15,5 +15,8 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.3, 0.2, 0.1, 1.0);
+    let g = in.clip_position[0] / 100.0;
+    let r = in.clip_position[1] / 800.0;
+    let out = vec4<f32>(r, g, 0.1, 1.0);
+    return out;
 }
