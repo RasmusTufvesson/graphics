@@ -1,5 +1,6 @@
 mod window;
 mod texture;
+mod camera;
 
 fn main() {
     env_logger::init();
