@@ -1,4 +1,4 @@
-use glam::{Mat4, Quat, Vec3};
+use glam::{vec4, Mat4, Quat, Vec3, Vec4};
 use winit::event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 
 pub struct Camera {
@@ -21,6 +21,7 @@ impl Camera {
         let view = Mat4::look_at_rh(self.eye, self.target, self.up);
         let proj = Mat4::perspective_rh(self.aspect, self.fovy.to_radians(), self.znear, self.zfar);
         self.uniform.view_proj = OPENGL_TO_WGPU_MATRIX * proj * view;
+        self.uniform.view_pos = vec4(self.eye.x, self.eye.y, self.eye.z, 1.0);
     }
 }
 
@@ -35,12 +36,14 @@ pub const OPENGL_TO_WGPU_MATRIX: glam::Mat4 = glam::Mat4::from_cols_array(&[
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
+    view_pos: Vec4,
     view_proj: Mat4,
 }
 
 impl CameraUniform {
     fn new() -> Self {
         Self {
+            view_pos: Vec4::ZERO,
             view_proj: Mat4::IDENTITY,
         }
     }
