@@ -1,9 +1,10 @@
 use std::io::{BufReader, Cursor};
 use glam::{vec2, vec3, Vec2, Vec3};
+use tobj::Model;
 use wgpu::util::DeviceExt;
-use crate::{model, texture};
+use crate::{model::{self, Mesh}, texture};
 
-pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
+pub fn load_string(file_name: &str) -> anyhow::Result<String> {
     let path = std::path::Path::new(env!("OUT_DIR"))
         .join("res")
         .join(file_name);
@@ -11,7 +12,7 @@ pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
     Ok(txt)
 }
 
-pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
+pub fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
     let path = std::path::Path::new(env!("OUT_DIR"))
         .join("res")
         .join(file_name);
@@ -19,46 +20,46 @@ pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
     Ok(data)
 }
 
-pub async fn load_texture(
+pub fn load_texture(
     file_name: &str,
     is_normal_map: bool,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> anyhow::Result<texture::Texture> {
-    let data = load_binary(file_name).await?;
+    let data = load_binary(file_name)?;
     texture::Texture::from_bytes(device, queue, &data, file_name, is_normal_map)
 }
 
-pub async fn load_model(
+pub fn load_model(
     file_name: &str,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
-) -> anyhow::Result<model::Model> {
-    let obj_text = load_string(file_name).await?;
+) -> anyhow::Result<model::MatModel> {
+    let obj_text = load_string(file_name)?;
     let obj_cursor = Cursor::new(obj_text);
     let mut obj_reader = BufReader::new(obj_cursor);
 
-    let (models, obj_materials) = tobj::load_obj_buf_async(
+    let (models, obj_materials) = tobj::load_obj_buf(
         &mut obj_reader,
         &tobj::LoadOptions {
             triangulate: true,
             single_index: true,
             ..Default::default()
         },
-        |p| async move {
-            let mat_text = load_string(&p).await.unwrap();
+        move |p| {
+            let mat_text = load_string(p.to_str().unwrap()).unwrap();
             tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
         },
     )
-    .await?;
+    ?;
 
     let mut materials = Vec::new();
     for m in obj_materials? {
-        let diffuse_texture = load_texture(&m.diffuse_texture.unwrap(), false, device, queue).await?;
-        let normal_texture = load_texture(&m.normal_texture.unwrap(), true, device, queue).await?;
+        let diffuse_texture = load_texture(&m.diffuse_texture.unwrap(), false, device, queue)?;
+        let normal_texture = load_texture(&m.normal_texture.unwrap(), true, device, queue)?;
 
-        materials.push(model::Material::new(
+        materials.push(model::ModelMaterial::new(
             device,
             &m.name,
             diffuse_texture,
@@ -67,7 +68,13 @@ pub async fn load_model(
         ));
     }
 
-    let meshes = models
+    let meshes = get_meshes(models, device, file_name);
+
+    Ok(model::MatModel { meshes, materials })
+}
+
+fn get_meshes(models: Vec<Model>, device: &wgpu::Device, file_name: &str) -> Vec<Mesh> {
+    models
         .into_iter()
         .map(|m| {
             let mut vertices = (0..m.mesh.positions.len() / 3)
@@ -158,7 +165,5 @@ pub async fn load_model(
                 material: m.mesh.material_id.unwrap_or(0),
             }
         })
-        .collect::<Vec<_>>();
-
-    Ok(model::Model { meshes, materials })
+        .collect::<Vec<_>>()
 }

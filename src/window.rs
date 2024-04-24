@@ -1,18 +1,18 @@
-use wgpu::{util::DeviceExt, SurfaceTargetUnsafe};
+use wgpu::SurfaceTargetUnsafe;
 use winit::{
     event::{DeviceEvent, Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
-use crate::{camera, model::{self, DrawModel, ModelVertex, Vertex, DrawLight}, resources, texture::Texture};
-use glam::{vec3, Mat3, Mat4, Quat, Vec3};
+use crate::{texture::Texture, App};
+use glam::{Mat3, Mat4, Quat, Vec3};
 
-pub async fn run() -> Result<(), ()> {
+pub async fn run(app: Box<dyn App>) -> Result<(), ()> {
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut state = State::new(window).await;
+    let mut state = State::new(window, app).await;
 
     match event_loop.run(move |event, elwt| {
         match event {
@@ -66,18 +66,8 @@ struct State<'a> {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    render_pipeline: wgpu::RenderPipeline,
-    camera: camera::CameraController,
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    instances: Vec<Instance>,
-    instance_buffer: wgpu::Buffer,
     depth_texture: Texture,
-    obj_model: model::Model,
-    light_uniform: LightUniform,
-    light_buffer: wgpu::Buffer,
-    light_bind_group: wgpu::BindGroup,
-    light_render_pipeline: wgpu::RenderPipeline,
+    app: Box<dyn App>,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
@@ -85,7 +75,7 @@ struct State<'a> {
 }
 
 impl State<'_> {
-    async fn new(window: Window) -> Self {
+    async fn new(window: Window, mut app: Box<dyn App>) -> Self {
         let mut size = window.inner_size();
         size.height = size.height.max(1);
         size.width = size.width.max(1);
@@ -133,210 +123,10 @@ impl State<'_> {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-
-        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-            label: Some("texture_bind_group_layout"),
-        });
-
-        let mut camera = camera::Camera::new(
-            (0.0, 1.0, 2.0).into(),
-            (0.0, 0.0, 0.0).into(),
-            Vec3::Y,
-            config.width as f32 / config.height as f32,
-            45.0,
-            0.1,
-            100.0,
-        );
-        camera.build_view_projection_matrix();
-        let camera = camera::CameraController::new(camera, 0.004);
-
-        let camera_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Camera Buffer"),
-                contents: bytemuck::cast_slice(&[camera.camera.uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-            ],
-            label: Some("camera_bind_group_layout"),
-        });
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("camera_bind_group"),
-        });
-
-        const SPACE_BETWEEN: f32 = 3.0;
-        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
-            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-                let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-
-                let position = vec3(x, 0.0, z);
-
-                let rotation = if position == Vec3::ZERO {
-                    Quat::from_axis_angle(Vec3::Z, 0.0)
-                } else {
-                    Quat::from_axis_angle(position.normalize(), 45.0_f32.to_radians())
-                };
-
-                Instance {
-                    position, rotation,
-                }
-            })
-        }).collect::<Vec<_>>();
-
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instance_data),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
         
         let depth_texture = Texture::create_depth_texture(&device, &config, "depth_texture");
 
-        let light_uniform = LightUniform {
-            position: vec3(2.0, 2.0, 2.0),
-            _padding: 0,
-            color: vec3(1.0, 1.0, 1.0),
-            _padding2: 0,
-        };
-        
-        let light_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Light VB"),
-                contents: bytemuck::cast_slice(&[light_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-
-        let light_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-            label: None,
-        });
-    
-        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &light_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: light_buffer.as_entire_binding(),
-            }],
-            label: None,
-        });
-
-        let render_pipeline_layout = device.create_pipeline_layout(
-            &wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &texture_bind_group_layout,
-                    &camera_bind_group_layout,
-                    &light_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-            }
-        );
-        let render_pipeline = {
-            let shader = wgpu::ShaderModuleDescriptor {
-                label: Some("Normal Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-            };
-            create_render_pipeline(
-                &device,
-                &render_pipeline_layout,
-                config.format,
-                Some(Texture::DEPTH_FORMAT),
-                &[ModelVertex::desc(), InstanceRaw::desc()],
-                shader,
-            )
-        };
-        
-        let light_render_pipeline = {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Light Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout, &light_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-            let shader = wgpu::ShaderModuleDescriptor {
-                label: Some("Light Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
-            };
-            create_render_pipeline(
-                &device,
-                &layout,
-                config.format,
-                Some(Texture::DEPTH_FORMAT),
-                &[ModelVertex::desc()],
-                shader,
-            )
-        };
-
-        let obj_model = resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
-            .await
-            .unwrap();
+        app.setup(&queue, &device, &config);
 
         Self {
             window,
@@ -345,18 +135,8 @@ impl State<'_> {
             queue,
             config,
             size,
-            render_pipeline,
-            camera,
-            camera_bind_group,
-            camera_buffer,
-            instance_buffer,
-            instances,
+            app,
             depth_texture,
-            obj_model,
-            light_uniform,
-            light_buffer,
-            light_bind_group,
-            light_render_pipeline,
         }
     }
 
@@ -375,29 +155,15 @@ impl State<'_> {
     }
 
     fn window_event(&mut self, event: &WindowEvent) -> bool {
-        let (processed, update_camera) = self.camera.window_event(event);
-        if processed {
-            if update_camera {
-                self.update_camera_buffer();
-            }
-            return true;
-        }
-        false
+        self.app.window_event(event, &self.queue)
     }
 
     fn device_event(&mut self, event: &DeviceEvent) {
-        if self.camera.device_event(event) {
-            self.update_camera_buffer();
-        }
+        self.app.device_event(event, &self.queue)
     }
 
     fn update(&mut self) {
-        let old_position: Vec3 = self.light_uniform.position.into();
-        self.light_uniform.position =
-            (Quat::from_axis_angle((0.0, 1.0, 0.0).into(), 1.0_f32.to_radians())
-                * old_position)
-                .into();
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        self.app.update(&self.queue);
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -435,22 +201,7 @@ impl State<'_> {
                 timestamp_writes: None,
             });
 
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-
-            render_pass.set_pipeline(&self.light_render_pipeline);
-            render_pass.draw_light_model(
-                &self.obj_model,
-                &self.camera_bind_group,
-                &self.light_bind_group,
-            );
-
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw_model_instanced(
-                &self.obj_model,
-                0..self.instances.len() as u32,
-                &self.camera_bind_group,
-                &self.light_bind_group
-            );
+            self.app.render(&mut render_pass);
         }
     
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -458,19 +209,19 @@ impl State<'_> {
     
         Ok(())
     }
-
-    fn update_camera_buffer(&mut self) {
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera.camera.uniform]));
-    }
 }
 
-struct Instance {
+pub struct Instance {
     position: Vec3,
     rotation: Quat,
 }
 
 impl Instance {
-    fn to_raw(&self) -> InstanceRaw {
+    pub fn new(position: Vec3, rotation: Quat) -> Self {
+        Self { position, rotation }
+    }
+
+    pub fn to_raw(&self) -> InstanceRaw {
         InstanceRaw {
             model: Mat4::from_translation(self.position) * Mat4::from_quat(self.rotation),
             normal: Mat3::from_quat(self.rotation),
@@ -481,14 +232,14 @@ impl Instance {
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceRaw {
+pub struct InstanceRaw {
     model: Mat4,
     normal: Mat3,
     _padding: [u32; 3],
 }
 
 impl InstanceRaw {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
@@ -534,20 +285,7 @@ impl InstanceRaw {
     }
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct LightUniform {
-    position: Vec3,
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
-    _padding: u32,
-    color: Vec3,
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
-    _padding2: u32,
-}
-
-fn create_render_pipeline(
+pub fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     color_format: wgpu::TextureFormat,
