@@ -8,8 +8,12 @@ name = "graphics"
 path = "src/lib.rs"
 
 [[bin]]
-name = "game"
-path = "src/main.rs"
+name = "test"
+path = "src/test.rs"
+
+[[bin]]
+name = "fun"
+path = "src/fun.rs"
 
 [dependencies]
 anyhow = "1.0.82"

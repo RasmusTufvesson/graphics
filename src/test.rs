@@ -1,5 +1,5 @@
 use glam::{vec3, Quat, Vec3};
-use graphics::{self, camera, model::{self, DrawModel, ModelVertex, Vertex}, resources, texture::Texture, window::{create_render_pipeline, Instance, InstanceRaw}, App};
+use graphics::{self, camera, model::{self, DrawModel, ModelVertex, Vertex, ModelInstance, ModelInstanceRaw}, resources, texture::Texture, window::create_render_pipeline, App};
 use wgpu::{util::DeviceExt, Queue, RenderPass};
 
 const NUM_INSTANCES_PER_ROW: u32 = 10;
@@ -18,7 +18,7 @@ struct GameState {
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
     light_render_pipeline: wgpu::RenderPipeline,
-    instances: Vec<Instance>,
+    instances: Vec<ModelInstance>,
     instance_buffer: wgpu::Buffer,
     obj_model: model::MatModel,
 }
@@ -268,7 +268,7 @@ impl App for Game {
                 &render_pipeline_layout,
                 config.format,
                 Some(Texture::DEPTH_FORMAT),
-                &[ModelVertex::desc(), InstanceRaw::desc()],
+                &[ModelVertex::desc(), ModelInstanceRaw::desc()],
                 shader,
             )
         };
@@ -310,11 +310,11 @@ impl App for Game {
                     Quat::from_axis_angle(position.normalize(), 45.0_f32.to_radians())
                 };
 
-                Instance::new(position, rotation)
+                ModelInstance::new(position, rotation)
             })
         }).collect::<Vec<_>>();
 
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_data = instances.iter().map(ModelInstance::to_raw).collect::<Vec<_>>();
         let instance_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Instance Buffer"),
